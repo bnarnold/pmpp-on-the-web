@@ -1,0 +1,15 @@
+[package]
+name = "pmpp-on-the-web"
+version = "0.1.0"
+edition = "2021"
+authors = ["Bertram Arnold <bertram.arnold@gmail.com"]
+
+[dependencies]
+bytemuck = { version = "1.21.0", features = ["derive"] }
+color-eyre = "0.6.3"
+eyre = "0.6.12"
+futures-intrusive = "0.5.0"
+pollster = "0.4.0"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
+wgpu = "24.0.1"
