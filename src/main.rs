@@ -1,10 +1,19 @@
 use eyre::OptionExt;
+use tracing_subscriber::{
+    fmt::{self, format::FmtSpan},
+    prelude::*,
+    EnvFilter,
+};
 use wgpu::util::DeviceExt;
 
+#[tracing::instrument]
 async fn run() -> eyre::Result<()> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .request_adapter(&wgpu::RequestAdapterOptionsBase {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })
         .await
         .ok_or_eyre("request adapter")?;
     let features = adapter.features();
@@ -125,23 +134,26 @@ async fn run() -> eyre::Result<()> {
     queue.submit(Some(encoder.finish()));
 
     let buf_slice = output_buf.slice(..);
-    let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
+    let (sender_data, receiver_data) = futures_intrusive::channel::shared::oneshot_channel();
     buf_slice.map_async(wgpu::MapMode::Read, move |res| {
-        sender.send(res).unwrap();
+        sender_data.send(res).unwrap();
     });
     let query_slice = query_staging_buf.slice(..);
-    query_slice.map_async(wgpu::MapMode::Read, |_| {});
+    let (sender_query, receiver_query) = futures_intrusive::channel::shared::oneshot_channel();
+    query_slice.map_async(wgpu::MapMode::Read, move |res| {
+        sender_query.send(res).unwrap()
+    });
+
     device.poll(wgpu::MaintainBase::wait());
-    if let Some(Ok(())) = receiver.receive().await {
+    if let (Some(Ok(())), _) = futures::join!(receiver_data.receive(), receiver_query.receive()) {
         let data_bytes = &*buf_slice.get_mapped_range();
         let data: &[f32] = bytemuck::cast_slice(data_bytes);
-        println!("got back {} elements", data.len());
+        tracing::info!("got back {} elements", data.len());
 
-        // YOLO, it's probably been mapped by now
         let query_bytes = &*query_slice.get_mapped_range();
         let query: &[u64] = bytemuck::cast_slice(query_bytes);
         let ts_period = queue.get_timestamp_period();
-        println!(
+        tracing::info!(
             "query took {:.3}ms",
             (query[1] - query[0]) as f32 * ts_period * 1e-3
         );
@@ -152,5 +164,9 @@ async fn run() -> eyre::Result<()> {
 
 fn main() {
     color_eyre::install().unwrap();
+    tracing_subscriber::registry()
+        .with(EnvFilter::from_default_env())
+        .with(fmt::layer().with_span_events(FmtSpan::CLOSE))
+        .init();
     pollster::block_on(run()).unwrap()
 }
